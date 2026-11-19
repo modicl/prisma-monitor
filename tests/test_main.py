@@ -131,3 +131,12 @@ def test_actividad_para_superadmin_devuelve_el_snapshot(client):
 def test_metricas_sigue_igual_con_actividad(client):
     r = client.get("/api/monitor/metrics", headers=bearer(["SUPERADMIN"]))
     assert r.status_code == 200 and r.json()["flows"]["running"] == 1
+
+
+@pytest.mark.parametrize("ruta", ["/api/monitor/metrics", "/api/monitor/activity"])
+def test_preflight_options_responde_204_sin_token_ni_cors(client, ruta):
+    # El API Gateway reenvía los OPTIONS (ruta sin authorizer) al monitor; si este responde 405 el navegador bloquea
+    # las llamadas. El monitor contesta 204 y NO emite cabeceras CORS: de eso se encarga el gateway.
+    r = client.options(ruta)
+    assert r.status_code == 204 and r.content == b""
+    assert not any(h.lower().startswith("access-control-") for h in r.headers)

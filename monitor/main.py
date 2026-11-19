@@ -86,6 +86,12 @@ def create_app(settings: Settings | None = None, aggregator: Aggregator | None =
                 "replaying": live.replaying if live else False,
                 "kafka_connected": live.connected if live else False}
 
+    @app.options("/api/monitor/{ruta:path}", include_in_schema=False)
+    def preflight(ruta: str):
+        # El API Gateway reenvía el OPTIONS (ruta sin authorizer) hasta aquí. Basta un 2xx vacío: las cabeceras CORS las
+        # agrega el gateway, este servicio nunca las emite (duplicadas, el navegador rechaza la respuesta).
+        return Response(status_code=204)
+
     @app.get("/api/monitor/metrics")
     def metrics(response: Response, _user: dict = Depends(require_superadmin)):
         response.headers["Cache-Control"] = "no-store"
