@@ -10,6 +10,10 @@
   --bad: #c92a2a;
   --idle: #868e96;
   --bar: #4c6ef5;
+  --r-super: #7048e8;
+  --r-admin: #c2255c;
+  --r-teacher: #1971c2;
+  --r-none: #667085;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -25,6 +29,10 @@
     --bad: #ff6b6b;
     --idle: #868e96;
     --bar: #748ffc;
+    --r-super: #b197fc;
+    --r-admin: #faa2c1;
+    --r-teacher: #74c0fc;
+    --r-none: #adb5bd;
   }
 }
 
@@ -92,6 +100,18 @@ td.r, th.r { text-align: right; }
 .empty { color: var(--muted); padding: 12px 0; }
 .foot { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
 .foot .bad { color: var(--bad); }
+
+/* Pestañas y roles */
+.tabs { display: inline-flex; gap: 4px; }
+.tab { padding: 5px 12px; }
+.tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { .tab.active { color: #0f1218; } }
+.role { font-weight: 600; }
+.role-SUPERADMIN { color: var(--r-super); }
+.role-ADMIN { color: var(--r-admin); }
+.role-TEACHER { color: var(--r-teacher); }
+.role-none { color: var(--r-none); }
+.chip[class*="role-"] { border-color: currentColor; }
 
 /* Pantallas de acceso */
 .center { min-height: 100vh; display: grid; place-items: center; padding: 16px; }

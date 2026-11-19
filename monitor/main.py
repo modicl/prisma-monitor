@@ -14,6 +14,8 @@ from fastapi import Depends, FastAPI, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .activity import ActivityAggregator
+from .activity_consumer import ActivityConsumer
 from .aggregator import Aggregator
 from .archiver import Archiver, ArchiveStatus
 from .auth import require_superadmin
@@ -35,7 +37,7 @@ def _csp(settings: Settings) -> str:
 
 
 def create_app(settings: Settings | None = None, aggregator: Aggregator | None = None,
-               start_background: bool = True) -> FastAPI:
+               activity: ActivityAggregator | None = None, start_background: bool = True) -> FastAPI:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = settings or get_settings()
     aggregator = aggregator or Aggregator(
@@ -44,8 +46,10 @@ def create_app(settings: Settings | None = None, aggregator: Aggregator | None =
         retention=timedelta(hours=settings.retention_hours),
     )
 
+    activity = activity or ActivityAggregator()
     kafka_on = start_background and bool(settings.kafka_bootstrap)
     live = LiveConsumer(settings, aggregator) if kafka_on else None
+    activity_consumer = ActivityConsumer(settings, activity) if kafka_on else None
     archive_on = kafka_on and bool(settings.database_url)
     archive_status = ArchiveStatus(enabled=archive_on)
     store = EventStore(settings.database_url) if archive_on else None
@@ -53,7 +57,7 @@ def create_app(settings: Settings | None = None, aggregator: Aggregator | None =
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        tasks = [asyncio.create_task(x.run(), name=type(x).__name__) for x in (live, archiver) if x]
+        tasks = [asyncio.create_task(x.run(), name=type(x).__name__) for x in (live, activity_consumer, archiver) if x]
         try:
             yield
         finally:
@@ -90,6 +94,11 @@ def create_app(settings: Settings | None = None, aggregator: Aggregator | None =
             replaying=live.replaying if live else False,
             archive=archive_status.as_dict(),
         )
+
+    @app.get("/api/monitor/activity")
+    def activity_snapshot(response: Response, _user: dict = Depends(require_superadmin)):
+        response.headers["Cache-Control"] = "no-store"
+        return activity.snapshot(datetime.now(timezone.utc))
 
     # El front solo se sirve desde aquí en local. En producción (SERVE_FRONT=false) lo hospeda Amplify, este
     # servicio expone únicamente la API y no publica HTML ni configuración sin autenticar.

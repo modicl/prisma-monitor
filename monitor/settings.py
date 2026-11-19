@@ -11,6 +11,7 @@ from typing import Mapping
 class Settings:
     kafka_bootstrap: str = ""              # vacío => el monitor arranca sin consumir (útil en tests)
     kafka_topic: str = "prisma.agent-events"
+    activity_topic: str = "prisma.activity-events"
     archiver_group: str = "prisma-monitor-archiver"
     database_url: str = ""                 # vacío => sin respaldo en tabla log
     cognito_region: str = "us-east-1"
@@ -56,6 +57,7 @@ class Settings:
         return cls(
             kafka_bootstrap=s("KAFKA_BOOTSTRAP_SERVERS"),
             kafka_topic=s("KAFKA_TOPIC", "prisma.agent-events"),
+            activity_topic=s("KAFKA_ACTIVITY_TOPIC", "prisma.activity-events"),
             archiver_group=s("ARCHIVER_GROUP", "prisma-monitor-archiver"),
             database_url=s("MONITOR_DATABASE_URL"),
             cognito_region=s("COGNITO_REGION", "us-east-1"),

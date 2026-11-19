@@ -2,7 +2,7 @@
 /*
  * Front del monitor PRISMA. Sin build ni dependencias.
  * - Login: Cognito Hosted UI con PKCE (código propio; no comparte nada con prisma-front).
- * - Datos: polling a /api/monitor/metrics cada 3 s con el ID token como Bearer.
+ * - Datos: polling a /api/monitor/metrics y /api/monitor/activity (en paralelo) cada 3 s con el ID token como Bearer.
  * - Seguridad: todo se pinta con textContent/createElement (nunca innerHTML). La CSP solo permite
  *   el propio origen y el dominio de Cognito.
  * El servidor es quien exige SUPERADMIN; este front solo muestra el 401/403 que reciba.
@@ -158,9 +158,76 @@ function card(title, big, sub, extra) {
   return el('div', { class: 'card' }, el('h2', { text: title }), el('div', { class: 'big num', text: big }), sub, extra);
 }
 
+const ROLES = ['SUPERADMIN', 'ADMIN', 'TEACHER', 'none'];
+const roleCls = (r) => `role-${ROLES.includes(r) ? r : 'none'}`;
+const ms = (n) => (n == null ? '—' : int(Math.round(n)));
+const rate = (n) => (n == null ? '—' : n.toLocaleString('es-CL', { minimumFractionDigits: 1, maximumFractionDigits: 1 }));
+
+/** Contenido de la pestaña «Uso» (actividad HTTP del BFF). Todo el texto va con textContent. */
+function renderUsage(m, ctx) {
+  const lat = m.latency || {};
+  const kpis = el('div', { class: 'grid' },
+    card('Usuarios activos', int(m.active_users), el('div', { class: 'sub', text: 'Últimos 60 s' })),
+    card('Req/s', rate(m.requests_per_s), el('div', { class: 'sub' }, 'Últimos 60 s · total desde el inicio del monitor: ', el('b', { text: int(m.requests_total) }))),
+    card('Latencia p50 / p95', lat.p50_ms == null && lat.p95_ms == null ? '—' : `${ms(lat.p50_ms)} / ${ms(lat.p95_ms)} ms`,
+      el('div', { class: 'sub', text: 'Últimos 5 min' })),
+    card('Requests por rol', int(Object.values(m.by_role || {}).reduce((a, b) => a + b, 0)),
+      el('div', { class: 'sub', text: 'Últimos 5 min' }),
+      el('div', { class: 'chips' }, Object.entries(m.by_role || {}).map(([r, n]) =>
+        el('span', { class: `chip ${roleCls(r)}`, text: `${r}: ${int(n)}` })))),
+  );
+
+  const routesList = m.top_routes || [];
+  const maxRoute = Math.max(1, ...routesList.map((r) => r.count));
+  const routes = el('div', { class: 'section' }, el('h2', { text: 'Rutas más usadas (últimos 5 min)' }),
+    routesList.length ? el('div', { class: 'bars' }, routesList.map((r) => {
+      const fill = el('div', { class: 'bar-fill' });
+      fill.style.width = `${Math.max(2, (r.count / maxRoute) * 100)}%`;
+      return el('div', { class: 'bar-row' }, el('span', { text: r.route }), el('div', { class: 'bar-track' }, fill),
+        el('span', { class: 'bar-val num', text: int(r.count) }));
+    })) : el('div', { class: 'empty', text: 'Aún no hay rutas registradas.' }));
+
+  const head = ['Hora', 'Rol', 'Método', 'Ruta', 'Status', 'ms'];
+  const recent = m.recent || [];
+  const log = el('div', { class: 'section' }, el('h2', { text: 'Actividad reciente' }),
+    recent.length ? el('div', { class: 'table-wrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, head.map((h, i) => el('th', { class: i === 5 ? 'r' : '', text: h })))),
+      el('tbody', {}, recent.map((r) => el('tr', {},
+        el('td', { class: 'num', text: hhmmss(r.ts) }),
+        el('td', {}, el('span', { class: `role ${roleCls(r.role)}`, text: r.role })),
+        el('td', { text: r.method }), el('td', { text: r.route }),
+        el('td', { class: `num ${r.status >= 500 ? 's-bad' : r.status >= 400 ? 's-awaiting_hitl' : ''}`, text: String(r.status) }),
+        el('td', { class: 'r num', text: ms(r.latency_ms) })))))
+    ) : el('div', { class: 'empty', text: 'Aún no hay actividad. Usa PRISMA (o lanza la carga de k6) para verla aquí.' }));
+
+  const foot = m.skipped_events ? el('div', { class: 'foot', text: `${int(m.skipped_events)} eventos omitidos por no cumplir el contrato` }) : null;
+  return el('div', {}, kpis, routes, log, foot);
+}
+
 function render(m, ctx) {
-  const f = m.flows, t = m.tokens;
   const who = claims();
+  const tab = ctx.tab || 'agentico';
+  const tabs = el('div', { class: 'tabs', role: 'tablist' }, [['agentico', 'Agéntico'], ['uso', 'Uso']].map(([k, label]) =>
+    el('button', { class: `tab${tab === k ? ' active' : ''}`, role: 'tab', 'aria-selected': tab === k ? 'true' : 'false', text: label, onclick: () => ctx.onTab && ctx.onTab(k) })));
+  const stamp = (tab === 'uso' ? ctx.activity : m)?.generated_at;
+  const header = el('div', { class: 'top' }, el('h1', { text: 'Monitor PRISMA' }), tabs,
+    el('span', { class: 'live' }, el('span', { class: `dot${ctx.stale ? ' off' : ''}` }), ctx.stale ? 'sin conexión' : (stamp ? `actualizado ${hhmmss(stamp)}` : '')),
+    el('div', { class: 'spacer' }), el('span', { class: 'who', text: who?.email || '' }),
+    el('button', { onclick: logout, text: 'Cerrar sesión' }));
+
+  let body;
+  if (tab === 'uso') {
+    body = ctx.activity ? renderUsage(ctx.activity, ctx) : el('div', { class: 'empty', text: 'No se pudo obtener la actividad todavía.' });
+  } else if (m) body = renderAgentic(m);
+  else body = el('div', { class: 'empty', text: 'No se pudieron obtener las métricas todavía.' });
+
+  app.replaceChildren(el('div', { class: 'wrap' }, header,
+    tab === 'agentico' && m?.replaying ? el('div', { class: 'banner', role: 'status', text: 'Reconstruyendo el historial desde Kafka… las cifras se completan en unos segundos.' }) : null,
+    body));
+}
+
+function renderAgentic(m) {
+  const f = m.flows, t = m.tokens;
   const kpis = el('div', { class: 'grid' },
     card('Flujos corriendo', int(f.running),
       el('div', { class: 'sub' }, 'Esperando docente: ', el('b', { text: int(f.awaiting_hitl) }), ' · Detenidos: ', el('b', { text: int(f.stalled) }))),
@@ -203,40 +270,58 @@ function render(m, ctx) {
         ` · ${int(a.saved_total)} eventos guardados`, a.last_saved_at ? ` · último ${hhmmss(a.last_saved_at)}` : '']
       : 'Respaldo en tabla log: desactivado', m.skipped_events ? ` · ${int(m.skipped_events)} eventos omitidos por no cumplir el contrato` : '');
 
-  const header = el('div', { class: 'top' }, el('h1', { text: 'Monitor PRISMA' }),
-    el('span', { class: 'live' }, el('span', { class: `dot${ctx.stale ? ' off' : ''}` }), ctx.stale ? 'sin conexión' : `actualizado ${hhmmss(m.generated_at)}`),
-    el('div', { class: 'spacer' }), el('span', { class: 'who', text: who?.email || '' }),
-    el('button', { onclick: logout, text: 'Cerrar sesión' }));
-
-  app.replaceChildren(el('div', { class: 'wrap' }, header,
-    m.replaying ? el('div', { class: 'banner', role: 'status', text: 'Reconstruyendo el historial desde Kafka… las cifras se completan en unos segundos.' }) : null,
-    kpis, agents, table, foot));
+  return el('div', {}, kpis, agents, table, foot);
 }
 
 let timer = null;
+const newState = () => ({ last: null, activity: null, tab: 'agentico' });
+const shared = newState(); // un solo estado: la pestaña y los datos sobreviven a cambios de visibilidad
+let gen = 0; // generación del ciclo de polling: un ciclo viejo deja de pintar y de reprogramarse
+
+/** Pide un endpoint sin lanzar: devuelve {status, data} o {error} si falló la red. */
+async function getJson(cfg, path) {
+  try {
+    const r = await fetch(apiUrl(cfg, path), { headers: { Authorization: `Bearer ${session.get(STORE.token)}` }, cache: 'no-store' });
+    if (!r.ok) return { status: r.status };
+    return { status: r.status, data: await r.json() };
+  } catch (error) { return { error }; }
+}
+
+function paint(state, stale) {
+  render(state.last, {
+    stale, tab: state.tab, activity: state.activity,
+    onTab: (k) => { state.tab = k; paint(state, stale); },
+  });
+}
+
 async function poll(state) {
+  const mine = ++gen;
   clearTimeout(timer);
   if (document.hidden) { timer = setTimeout(() => poll(state), POLL_MS); return; }
   try {
     const cfg = await loadConfig();
-    const r = await fetch(apiUrl(cfg, '/api/monitor/metrics'), { headers: { Authorization: `Bearer ${session.get(STORE.token)}` }, cache: 'no-store' });
-    if (r.status === 401) { session.del(STORE.token); session.set(STORE.notice, 'Tu sesión expiró. Inicia sesión de nuevo.'); return location.replace('/login'); }
-    if (r.status === 403) return renderForbidden();
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    state.last = await r.json();
-    render(state.last, { stale: false });
+    const [mr, ar] = await Promise.all([getJson(cfg, '/api/monitor/metrics'), getJson(cfg, '/api/monitor/activity')]);
+    if (mine !== gen) return;
+    if (mr.status === 401 || ar.status === 401) { session.del(STORE.token); session.set(STORE.notice, 'Tu sesión expiró. Inicia sesión de nuevo.'); return location.replace('/login'); }
+    if (mr.status === 403 || ar.status === 403) return renderForbidden();
+    if (mr.data) state.last = mr.data;
+    if (ar.data) state.activity = ar.data;
+    if (!state.last && !state.activity) throw new Error('sin datos');
+    // «sin conexión» solo si falló lo que se está mirando; la otra pestaña conserva su último dato.
+    paint(state, !(state.tab === 'uso' ? ar.data : mr.data));
   } catch {
-    if (state.last) render(state.last, { stale: true });
+    if (mine !== gen) return;
+    if (state.last || state.activity) paint(state, true);
     else screen('Sin conexión', 'No se pudo obtener las métricas del monitor.', el('button', { onclick: () => location.reload(), text: 'Reintentar' }));
   }
   timer = setTimeout(() => poll(state), POLL_MS);
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden && claims()) poll({ last: null }); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && claims()) poll(shared); });
 
 // ── arranque ────────────────────────────────────────────────────────────────
 (async function main() {
   if (location.pathname === '/auth/callback') return handleCallback();
   if (location.pathname === '/login') return claims() ? location.replace('/') : renderLogin();
   if (!claims()) return location.replace('/login');
-  poll({ last: null });
+  poll(shared);
 })();

@@ -110,3 +110,24 @@ def test_el_monitor_nunca_emite_cors_lo_hace_el_api_gateway(request, cliente):
     r = c.get("/api/monitor/metrics", headers={**bearer(["SUPERADMIN"]), "Origin": "https://monitor.amplifyapp.com"})
     assert r.status_code == 200
     assert not any(h.lower().startswith("access-control-") for h in r.headers)
+
+
+# ── Actividad de uso ────────────────────────────────────────────────────────────────────────────
+def test_actividad_sin_token_es_401(client):
+    assert client.get("/api/monitor/activity").status_code == 401
+
+
+def test_actividad_para_teacher_es_403(client):
+    assert client.get("/api/monitor/activity", headers=bearer(["TEACHER"])).status_code == 403
+
+
+def test_actividad_para_superadmin_devuelve_el_snapshot(client):
+    r = client.get("/api/monitor/activity", headers=bearer(["SUPERADMIN"]))
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
+    assert {"active_users", "requests_per_s", "requests_total", "latency", "top_routes", "by_role",
+            "recent", "skipped_events"} <= set(r.json())
+
+
+def test_metricas_sigue_igual_con_actividad(client):
+    r = client.get("/api/monitor/metrics", headers=bearer(["SUPERADMIN"]))
+    assert r.status_code == 200 and r.json()["flows"]["running"] == 1
